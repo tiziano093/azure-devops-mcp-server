@@ -1,0 +1,60 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "containerAppName": {
+      "value": "azure-devops-mcp"
+    },
+    "imageName": {
+      "value": "ghcr.io/YOUR_ORG/azure-devops-mcp-server:latest"
+    },
+    "azureDevOpsOrg": {
+      "value": "YOUR_ADO_ORG"
+    },
+    "azureDevOpsPat": {
+      "reference": {
+        "keyVault": {
+          "id": "/subscriptions/YOUR_SUBSCRIPTION_ID/resourceGroups/YOUR_RG/providers/Microsoft.KeyVault/vaults/YOUR_KV"
+        },
+        "secretName": "azure-devops-pat"
+      }
+    },
+    "azureDevOpsProject": {
+      "value": ""
+    },
+    "mcpAuthToken": {
+      "reference": {
+        "keyVault": {
+          "id": "/subscriptions/YOUR_SUBSCRIPTION_ID/resourceGroups/YOUR_RG/providers/Microsoft.KeyVault/vaults/YOUR_KV"
+        },
+        "secretName": "mcp-auth-token"
+      }
+    },
+    "ghcrUsername": {
+      "value": "YOUR_GITHUB_USERNAME"
+    },
+    "ghcrToken": {
+      "reference": {
+        "keyVault": {
+          "id": "/subscriptions/YOUR_SUBSCRIPTION_ID/resourceGroups/YOUR_RG/providers/Microsoft.KeyVault/vaults/YOUR_KV"
+        },
+        "secretName": "ghcr-token"
+      }
+    },
+    "minReplicas": {
+      "value": 1
+    },
+    "maxReplicas": {
+      "value": 3
+    },
+    "logRetentionDays": {
+      "value": 30
+    },
+    "tags": {
+      "value": {
+        "app": "azure-devops-mcp-server",
+        "managed-by": "bicep"
+      }
+    }
+  }
+}

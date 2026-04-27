@@ -1,5 +1,7 @@
 import * as azdev from "azure-devops-node-api";
 
+import { ResponseCache } from "./cache.js";
+
 export type HttpMethod = "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
 
 export interface AdoConfig {
@@ -8,6 +10,8 @@ export interface AdoConfig {
   defaultProject?: string;
   pat: string;
   apiVersion: string;
+  cacheTtlSeconds: number;
+  cacheMaxSize: number;
 }
 
 export interface AdoRequestOptions {
@@ -18,6 +22,8 @@ export interface AdoRequestOptions {
   headers?: Record<string, string>;
   apiVersion?: string | null;
   retries?: number;
+  /** Skip the response cache for this request. */
+  noCache?: boolean;
 }
 
 export interface AdoResponse<T> {
@@ -66,11 +72,13 @@ export class AdoClient {
   private static instance?: AdoClient;
   public readonly connection: azdev.WebApi;
   private readonly authHeader: string;
+  private readonly cache: ResponseCache;
 
   private constructor(public readonly config: AdoConfig) {
     const authHandler = azdev.getPersonalAccessTokenHandler(config.pat);
     this.connection = new azdev.WebApi(config.organizationUrl, authHandler);
     this.authHeader = `Basic ${Buffer.from(`:${config.pat}`).toString("base64")}`;
+    this.cache = new ResponseCache(config.cacheTtlSeconds, config.cacheMaxSize);
   }
 
   static getInstance(): AdoClient {
@@ -78,6 +86,11 @@ export class AdoClient {
       AdoClient.instance = new AdoClient(loadConfigFromEnv());
     }
     return AdoClient.instance;
+  }
+
+  /** Exposed for testing. */
+  static _reset(): void {
+    AdoClient.instance = undefined;
   }
 
   resolveProject(project?: string): string {
@@ -128,7 +141,7 @@ export class AdoClient {
     path: string,
     collectionKey: string,
     options: AdoRequestOptions = {},
-    maxPages = 25
+    maxPages = 100
   ): Promise<{ items: TItem[]; continuationToken?: string }> {
     const items: TItem[] = [];
     let continuationToken = options.query?.continuationToken?.toString();
@@ -153,6 +166,50 @@ export class AdoClient {
     return { items, continuationToken };
   }
 
+  /**
+   * Fetches all pages of a list endpoint automatically, following continuation tokens.
+   * Use for large-org scenarios where result sets exceed a single page.
+   */
+  async fetchAllPages<TItem = unknown>(
+    method: HttpMethod,
+    path: string,
+    collectionKey: string,
+    options: AdoRequestOptions = {},
+    maxItems = 50_000
+  ): Promise<TItem[]> {
+    const items: TItem[] = [];
+    let continuationToken: string | undefined;
+
+    do {
+      const response = await this.requestWithMeta<Record<string, unknown>>(method, path, {
+        ...options,
+        noCache: true,
+        query: {
+          ...options.query,
+          continuationToken
+        }
+      });
+      const pageItems = extractItems<TItem>(response.data, collectionKey);
+      items.push(...pageItems);
+      continuationToken = response.continuationToken;
+
+      if (items.length >= maxItems) {
+        break;
+      }
+    } while (continuationToken);
+
+    return items;
+  }
+
+  /** Invalidate all cached responses that contain the given path substring. */
+  invalidateCache(pattern: string): void {
+    this.cache.invalidate(pattern);
+  }
+
+  clearCache(): void {
+    this.cache.clear();
+  }
+
   private async send<T>(
     method: HttpMethod,
     path: string,
@@ -171,6 +228,13 @@ export class AdoClient {
     const isPatchDocument = Array.isArray(options.body);
     if (hasBody && !headers["Content-Type"]) {
       headers["Content-Type"] = isPatchDocument ? "application/json-patch+json" : "application/json";
+    }
+
+    const isGet = method === "GET";
+    const useCache = isGet && !options.noCache && parseAs === "json";
+    if (useCache) {
+      const cached = this.cache.get<AdoResponse<T>>(url);
+      if (cached) return cached;
     }
 
     for (let attempt = 0; attempt <= retries; attempt += 1) {
@@ -202,11 +266,17 @@ export class AdoClient {
             ? safeJsonParse(rawText)
             : undefined;
 
-      return {
+      const result: AdoResponse<T> = {
         data: data as T,
         continuationToken,
         headers: headersObject
       };
+
+      if (useCache && !continuationToken) {
+        this.cache.set(url, result);
+      }
+
+      return result;
     }
 
     throw new Error("Unreachable retry state.");
@@ -265,7 +335,9 @@ function loadConfigFromEnv(): AdoConfig {
     organizationUrl,
     defaultProject: process.env.AZURE_DEVOPS_PROJECT,
     pat,
-    apiVersion: process.env.AZURE_DEVOPS_API_VERSION ?? "7.1"
+    apiVersion: process.env.AZURE_DEVOPS_API_VERSION ?? "7.1",
+    cacheTtlSeconds: Number.parseInt(process.env.CACHE_TTL_SECONDS ?? "60", 10),
+    cacheMaxSize: Number.parseInt(process.env.CACHE_MAX_SIZE ?? "500", 10)
   };
 }
 

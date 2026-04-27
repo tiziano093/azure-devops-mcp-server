@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import { AdoClient } from "../services/ado-client.js";
-import { csv, normalizeTop, projectArg, registerTool, wiqlQuote } from "./common.js";
+import { chunk, normalizeTop, projectArg, registerTool, wiqlQuote } from "./common.js";
 
 const expandWorkItem = z.enum(["none", "relations", "fields", "links", "all"]).optional();
 
@@ -15,7 +15,7 @@ export function registerBoardsTools(server: McpServer): void {
       ...projectArg,
       query: z.string().describe("Full WIQL query."),
       fields: z.array(z.string()).optional(),
-      top: z.number().int().positive().max(1000).optional(),
+      top: z.number().int().positive().max(20000).optional(),
       expand: expandWorkItem
     },
     async ({ project, query, fields, top, expand }) => {
@@ -23,7 +23,7 @@ export function registerBoardsTools(server: McpServer): void {
       const resolvedProject = client.resolveProject(project);
       const wiql = await client.request<{ workItems?: Array<{ id: number }> }>("POST", "wit/wiql", {
         project: resolvedProject,
-        query: { "$top": normalizeTop(top, 100, 1000) },
+        query: { "$top": normalizeTop(top, 100, 20000) },
         body: { query }
       });
       const ids = (wiql.workItems ?? []).map((item) => item.id);
@@ -39,10 +39,10 @@ export function registerBoardsTools(server: McpServer): void {
   registerTool(
     server,
     "batch_get_work_items",
-    "Fetch many work items by ID using the Azure DevOps batch API.",
+    "Fetch many work items by ID using the Azure DevOps batch API. Handles large batches automatically.",
     {
       ...projectArg,
-      ids: z.array(z.number().int().positive()).min(1).max(2000),
+      ids: z.array(z.number().int().positive()).min(1),
       fields: z.array(z.string()).optional(),
       expand: expandWorkItem
     },
@@ -260,7 +260,7 @@ export function registerBoardsTools(server: McpServer): void {
       areaPath: z.string().optional(),
       workItemTypes: z.array(z.string()).optional(),
       fields: z.array(z.string()).optional(),
-      top: z.number().int().positive().max(1000).optional()
+      top: z.number().int().positive().max(20000).optional()
     },
     async ({ project, areaPath, workItemTypes, fields, top }) => {
       const client = AdoClient.getInstance();
@@ -280,7 +280,7 @@ ORDER BY [Microsoft.VSTS.Common.Priority] ASC, [System.CreatedDate] DESC`;
 
       const wiql = await client.request<{ workItems?: Array<{ id: number }> }>("POST", "wit/wiql", {
         project: resolvedProject,
-        query: { "$top": normalizeTop(top, 100, 1000) },
+        query: { "$top": normalizeTop(top, 100, 20000) },
         body: { query }
       });
       const ids = (wiql.workItems ?? []).map((item) => item.id);
@@ -296,7 +296,7 @@ ORDER BY [Microsoft.VSTS.Common.Priority] ASC, [System.CreatedDate] DESC`;
       ...projectArg,
       team: z.string().optional(),
       fields: z.array(z.string()).optional(),
-      top: z.number().int().positive().max(1000).optional(),
+      top: z.number().int().positive().max(20000).optional(),
       expand: expandWorkItem
     },
     async ({ project, team, fields, top, expand }) => {
@@ -327,7 +327,7 @@ WHERE [System.TeamProject] = ${wiqlQuote(resolvedProject)}
 ORDER BY [Microsoft.VSTS.Common.Priority] ASC, [System.ChangedDate] DESC`;
       const wiql = await client.request<{ workItems?: Array<{ id: number }> }>("POST", "wit/wiql", {
         project: resolvedProject,
-        query: { "$top": normalizeTop(top, 100, 1000) },
+        query: { "$top": normalizeTop(top, 100, 20000) },
         body: { query }
       });
       const ids = (wiql.workItems ?? []).map((item) => item.id);
@@ -366,7 +366,7 @@ ORDER BY [Microsoft.VSTS.Common.Priority] ASC, [System.ChangedDate] DESC`;
       ...projectArg,
       team: z.string().optional(),
       boardName: z.string().optional(),
-      top: z.number().int().positive().max(1000).optional()
+      top: z.number().int().positive().max(20000).optional()
     },
     async ({ project, team, boardName, top }) => {
       const client = AdoClient.getInstance();
@@ -403,7 +403,7 @@ WHERE [System.TeamProject] = ${wiqlQuote(resolvedProject)}
 ORDER BY [System.ChangedDate] DESC`;
       const wiql = await client.request<{ workItems?: Array<{ id: number }> }>("POST", "wit/wiql", {
         project: resolvedProject,
-        query: { "$top": normalizeTop(top, 500, 1000) },
+        query: { "$top": normalizeTop(top, 500, 20000) },
         body: { query }
       });
       const ids = (wiql.workItems ?? []).map((item) => item.id);
@@ -473,9 +473,54 @@ ORDER BY [System.ChangedDate] DESC`;
       });
     }
   );
+
+  registerTool(
+    server,
+    "list_work_items_cross_project",
+    "Query work items across multiple projects using WIQL. Designed for large-org use.",
+    {
+      projects: z.array(z.string()).min(1).describe("List of project names to query."),
+      query: z.string().describe("WIQL query. Use [System.TeamProject] IN (...) or omit team project filter."),
+      fields: z.array(z.string()).optional(),
+      top: z.number().int().positive().max(20000).optional(),
+      expand: expandWorkItem
+    },
+    async ({ projects, query, fields, top, expand }) => {
+      const client = AdoClient.getInstance();
+      const projectList = projects.map(wiqlQuote).join(", ");
+      const fullQuery = query.includes("[System.TeamProject]")
+        ? query
+        : `${query.replace(/WHERE/i, `WHERE [System.TeamProject] IN (${projectList}) AND`)}`;
+
+      const wiql = await client.request<{ workItems?: Array<{ id: number; url?: string }> }>(
+        "POST",
+        "wit/wiql",
+        {
+          project: null,
+          query: { "$top": normalizeTop(top, 200, 20000) },
+          body: { query: fullQuery }
+        }
+      );
+      const ids = (wiql.workItems ?? []).map((item) => item.id);
+
+      const workItems: unknown[] = [];
+      for (const projectName of projects) {
+        const projectIds = ids.slice(0, normalizeTop(top, 200, 20000));
+        const batch = await getWorkItemsBatch(client, projectName, projectIds, fields, expand);
+        workItems.push(...batch);
+        if (workItems.length >= normalizeTop(top, 200, 20000)) break;
+      }
+
+      return {
+        count: ids.length,
+        returnedCount: workItems.length,
+        workItems
+      };
+    }
+  );
 }
 
-async function getWorkItemsBatch(
+export async function getWorkItemsBatch(
   client: AdoClient,
   project: string,
   ids: number[],
@@ -501,7 +546,7 @@ async function getWorkItemsBatch(
   return workItems;
 }
 
-function fieldPatch(field: string, value: unknown, op = "add"): Array<{ op: string; path: string; value: unknown }> {
+export function fieldPatch(field: string, value: unknown, op = "add"): Array<{ op: string; path: string; value: unknown }> {
   return value === undefined ? [] : [{ op, path: `/fields/${field}`, value }];
 }
 
@@ -517,12 +562,4 @@ function groupByBoardColumn(workItems: unknown[]): Array<{ column: string; count
   return [...counts.entries()]
     .map(([column, count]) => ({ column, count }))
     .sort((left, right) => left.column.localeCompare(right.column));
-}
-
-function chunk<T>(values: T[], size: number): T[][] {
-  const chunks: T[][] = [];
-  for (let index = 0; index < values.length; index += size) {
-    chunks.push(values.slice(index, index + size));
-  }
-  return chunks;
 }
