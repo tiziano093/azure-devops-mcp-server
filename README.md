@@ -8,6 +8,16 @@ Modular TypeScript MCP server for Azure DevOps. It exposes tools for projects, b
 - Azure DevOps Personal Access Token
 - PAT scopes matching the tools you use: Work Items, Code, Build, Release, Test Management, Packaging, Wiki, Audit Log, Security or Project Collection Admin for admin APIs.
 
+## Project Status
+
+This repository is structured for public contribution. See:
+
+- [Contributing](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
+- [Code of conduct](CODE_OF_CONDUCT.md)
+- [Support](SUPPORT.md)
+- [GitHub repository hardening guide](docs/maintainers/github-repository-hardening.md)
+
 ## Environment
 
 ```bash
@@ -90,6 +100,7 @@ Workflows are under `.github/workflows/`:
 
 - `ci.yml`: runs `npm ci`, `npm run typecheck`, `npm run build`, and `docker build`.
 - `cd.yml`: publishes the Docker image to GHCR on `main`, tags, or manual dispatch. If Azure Container App variables are configured, it deploys the image.
+- `codeql.yml`: runs GitHub code scanning for JavaScript/TypeScript.
 
 Required GitHub repository variables for deploy:
 
@@ -184,3 +195,19 @@ All tools use one error wrapper. Azure DevOps responses for `401`, `403`, `404`,
 ## Pagination
 
 Large list tools expose `top`, `skip`, and/or `continuationToken` when Azure DevOps supports them. The shared client also supports continuation-token pagination for batch-style calls.
+
+## Contributing
+
+For local development and pull request expectations:
+
+```bash
+npm install
+npm run typecheck
+npm run build
+```
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
+
+## License
+
+Licensed under the [Apache License 2.0](LICENSE).
