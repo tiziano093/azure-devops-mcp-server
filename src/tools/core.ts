@@ -172,6 +172,60 @@ export function registerCoreTools(server: McpServer): void {
 
   registerTool(
     server,
+    "create_project",
+    "Create a new Azure DevOps project (async — returns an operation ID to poll).",
+    {
+      name: z.string(),
+      description: z.string().optional(),
+      visibility: z.enum(["private", "public"]).default("private"),
+      processTemplate: z.enum(["Agile", "Scrum", "CMMI", "Basic"]).default("Agile"),
+      versionControl: z.enum(["Git", "Tfvc"]).default("Git")
+    },
+    async ({ name, description, visibility, processTemplate, versionControl }) => {
+      const client = AdoClient.getInstance();
+      const processes = await client.request<{ value?: Array<{ id?: string; name?: string }> }>(
+        "GET",
+        "work/processes",
+        { project: null, query: { "$expand": "none" } }
+      );
+      const process = processes.value?.find(
+        (p) => p.name?.toLowerCase() === processTemplate.toLowerCase()
+      );
+      if (!process?.id) {
+        throw new Error(`Process template '${processTemplate}' not found. Available: ${processes.value?.map((p) => p.name).join(", ")}`);
+      }
+      return client.request("POST", "projects", {
+        project: null,
+        body: {
+          name,
+          description,
+          visibility,
+          capabilities: {
+            versioncontrol: { sourceControlType: versionControl },
+            processTemplate: { templateTypeId: process.id }
+          }
+        }
+      });
+    }
+  );
+
+  registerTool(
+    server,
+    "get_operation",
+    "Poll an async operation (e.g. project creation) by operation ID.",
+    {
+      operationId: z.string()
+    },
+    async ({ operationId }) => {
+      const client = AdoClient.getInstance();
+      return client.request("GET", `operations/${encodeURIComponent(operationId)}`, {
+        project: null
+      });
+    }
+  );
+
+  registerTool(
+    server,
     "get_connection_data",
     "Return authenticated Azure DevOps user and deployment metadata.",
     {},

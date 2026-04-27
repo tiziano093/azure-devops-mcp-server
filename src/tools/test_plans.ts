@@ -18,6 +18,82 @@ const testResultSchema = z.object({
 export function registerTestPlansTools(server: McpServer): void {
   registerTool(
     server,
+    "create_test_plan",
+    "Create a new test plan.",
+    {
+      ...projectArg,
+      name: z.string(),
+      description: z.string().optional(),
+      areaPath: z.string().optional(),
+      startDate: z.string().optional(),
+      endDate: z.string().optional(),
+      iteration: z.string().optional()
+    },
+    async ({ project, name, description, areaPath, startDate, endDate, iteration }) => {
+      const client = AdoClient.getInstance();
+      return client.request("POST", "testplan/plans", {
+        project: client.resolveProject(project),
+        body: { name, description, areaPath, startDate, endDate, iteration }
+      });
+    }
+  );
+
+  registerTool(
+    server,
+    "get_test_plan",
+    "Get a test plan by ID.",
+    {
+      ...projectArg,
+      planId: z.number().int().positive()
+    },
+    async ({ project, planId }) => {
+      const client = AdoClient.getInstance();
+      return client.request("GET", `testplan/plans/${planId}`, {
+        project: client.resolveProject(project)
+      });
+    }
+  );
+
+  registerTool(
+    server,
+    "update_test_plan",
+    "Update a test plan.",
+    {
+      ...projectArg,
+      planId: z.number().int().positive(),
+      name: z.string().optional(),
+      description: z.string().optional(),
+      startDate: z.string().optional(),
+      endDate: z.string().optional(),
+      state: z.enum(["Active", "Inactive"]).optional()
+    },
+    async ({ project, planId, name, description, startDate, endDate, state }) => {
+      const client = AdoClient.getInstance();
+      return client.request("PATCH", `testplan/plans/${planId}`, {
+        project: client.resolveProject(project),
+        body: { name, description, startDate, endDate, state }
+      });
+    }
+  );
+
+  registerTool(
+    server,
+    "delete_test_plan",
+    "Delete a test plan.",
+    {
+      ...projectArg,
+      planId: z.number().int().positive()
+    },
+    async ({ project, planId }) => {
+      const client = AdoClient.getInstance();
+      return client.request("DELETE", `testplan/plans/${planId}`, {
+        project: client.resolveProject(project)
+      });
+    }
+  );
+
+  registerTool(
+    server,
     "list_test_plans",
     "List Azure Test Plans.",
     {
@@ -127,6 +203,43 @@ export function registerTestPlansTools(server: McpServer): void {
           detailsToInclude,
           "$top": normalizeTop(top, 100, 1000)
         }
+      });
+    }
+  );
+
+  registerTool(
+    server,
+    "create_test_suite",
+    "Create a child test suite in a test plan.",
+    {
+      ...projectArg,
+      planId: z.number().int().positive(),
+      parentSuiteId: z.number().int().positive(),
+      name: z.string(),
+      suiteType: z.enum(["staticTestSuite", "dynamicTestSuite", "requirementTestSuite"]).default("staticTestSuite"),
+      queryString: z.string().optional().describe("Required for dynamicTestSuite.")
+    },
+    async ({ project, planId, parentSuiteId, name, suiteType, queryString }) => {
+      const client = AdoClient.getInstance();
+      return client.request("POST", `testplan/Plans/${planId}/suites`, {
+        project: client.resolveProject(project),
+        body: { name, suiteType, parentSuite: { id: parentSuiteId }, queryString }
+      });
+    }
+  );
+
+  registerTool(
+    server,
+    "get_test_run_statistics",
+    "Get pass/fail/skipped statistics for a test run.",
+    {
+      ...projectArg,
+      runId: z.number().int().positive()
+    },
+    async ({ project, runId }) => {
+      const client = AdoClient.getInstance();
+      return client.request("GET", `test/Runs/${runId}/Statistics`, {
+        project: client.resolveProject(project)
       });
     }
   );

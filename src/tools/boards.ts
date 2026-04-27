@@ -476,6 +476,224 @@ ORDER BY [System.ChangedDate] DESC`;
 
   registerTool(
     server,
+    "delete_work_item",
+    "Move a work item to the recycle bin.",
+    {
+      ...projectArg,
+      id: z.number().int().positive(),
+      destroy: z.boolean().optional().describe("If true, permanently deletes instead of recycling.")
+    },
+    async ({ project, id, destroy }) => {
+      const client = AdoClient.getInstance();
+      return client.request("DELETE", `wit/workitems/${id}`, {
+        project: client.resolveProject(project),
+        query: { destroy }
+      });
+    }
+  );
+
+  registerTool(
+    server,
+    "list_recycle_bin",
+    "List work items in the recycle bin.",
+    {
+      ...projectArg,
+      top: z.number().int().positive().max(200).optional()
+    },
+    async ({ project, top }) => {
+      const client = AdoClient.getInstance();
+      return client.request("GET", "wit/recyclebin", {
+        project: client.resolveProject(project),
+        query: { "$top": top ?? 100 }
+      });
+    }
+  );
+
+  registerTool(
+    server,
+    "restore_work_item",
+    "Restore a work item from the recycle bin.",
+    {
+      ...projectArg,
+      id: z.number().int().positive()
+    },
+    async ({ project, id }) => {
+      const client = AdoClient.getInstance();
+      return client.request("PATCH", `wit/recyclebin/${id}`, {
+        project: client.resolveProject(project),
+        body: { isDeleted: false }
+      });
+    }
+  );
+
+  registerTool(
+    server,
+    "manage_work_item_links",
+    "Add or remove links (parent, child, related, duplicate) between work items.",
+    {
+      ...projectArg,
+      id: z.number().int().positive(),
+      links: z.array(z.object({
+        op: z.enum(["add", "remove"]),
+        rel: z.string().describe("Relation type: System.LinkTypes.Hierarchy-Forward (child), System.LinkTypes.Hierarchy-Reverse (parent), System.LinkTypes.Related, System.LinkTypes.Duplicate-Forward."),
+        targetId: z.number().int().positive(),
+        comment: z.string().optional()
+      }))
+    },
+    async ({ project, id, links }) => {
+      const client = AdoClient.getInstance();
+      const patch = links.map((link) => ({
+        op: link.op,
+        path: "/relations/-",
+        value: {
+          rel: link.rel,
+          url: `${client.config.organizationUrl}/_apis/wit/workItems/${link.targetId}`,
+          attributes: link.comment ? { comment: link.comment } : undefined
+        }
+      }));
+      return client.request("PATCH", `wit/workitems/${id}`, {
+        project: client.resolveProject(project),
+        body: patch
+      });
+    }
+  );
+
+  registerTool(
+    server,
+    "bulk_update_work_items",
+    "Update multiple work items in a single operation. Each entry specifies an ID and fields/state to update.",
+    {
+      ...projectArg,
+      updates: z.array(z.object({
+        id: z.number().int().positive(),
+        fields: z.record(z.unknown()).optional(),
+        state: z.string().optional(),
+        assignedTo: z.string().optional(),
+        iterationPath: z.string().optional()
+      })).min(1).max(200)
+    },
+    async ({ project, updates }) => {
+      const client = AdoClient.getInstance();
+      const resolvedProject = client.resolveProject(project);
+      const results = await Promise.allSettled(
+        updates.map(({ id, fields, state, assignedTo, iterationPath }) => {
+          const patch = [
+            ...(state ? [{ op: "replace", path: "/fields/System.State", value: state }] : []),
+            ...(assignedTo ? [{ op: "replace", path: "/fields/System.AssignedTo", value: assignedTo }] : []),
+            ...(iterationPath ? [{ op: "replace", path: "/fields/System.IterationPath", value: iterationPath }] : []),
+            ...Object.entries(fields ?? {}).map(([field, value]) => ({ op: "add", path: `/fields/${field}`, value }))
+          ];
+          if (!patch.length) return Promise.resolve({ id, skipped: true });
+          return client.request("PATCH", `wit/workitems/${id}`, {
+            project: resolvedProject,
+            body: patch
+          });
+        })
+      );
+      return {
+        total: updates.length,
+        succeeded: results.filter((r) => r.status === "fulfilled").length,
+        failed: results.filter((r) => r.status === "rejected").length,
+        results: results.map((r, i) => ({
+          id: updates[i].id,
+          status: r.status,
+          value: r.status === "fulfilled" ? r.value : undefined,
+          error: r.status === "rejected" ? String(r.reason) : undefined
+        }))
+      };
+    }
+  );
+
+  registerTool(
+    server,
+    "create_classification_node",
+    "Create an area path or iteration path node.",
+    {
+      ...projectArg,
+      nodeType: z.enum(["areas", "iterations"]),
+      path: z.string().describe("Parent path, e.g. 'MyProject\\Team A' (use \\\\ in JSON)."),
+      name: z.string(),
+      startDate: z.string().optional().describe("For iterations only."),
+      finishDate: z.string().optional().describe("For iterations only.")
+    },
+    async ({ project, nodeType, path, name, startDate, finishDate }) => {
+      const client = AdoClient.getInstance();
+      const encodedPath = path.split("\\").map(encodeURIComponent).join("/");
+      return client.request("POST", `wit/classificationnodes/${nodeType}/${encodedPath}`, {
+        project: client.resolveProject(project),
+        body: {
+          name,
+          attributes: (startDate || finishDate) ? { startDate, finishDate } : undefined
+        }
+      });
+    }
+  );
+
+  registerTool(
+    server,
+    "update_classification_node",
+    "Rename an area/iteration node or update iteration dates.",
+    {
+      ...projectArg,
+      nodeType: z.enum(["areas", "iterations"]),
+      path: z.string().describe("Full path including the node name."),
+      name: z.string().optional(),
+      startDate: z.string().optional(),
+      finishDate: z.string().optional()
+    },
+    async ({ project, nodeType, path, name, startDate, finishDate }) => {
+      const client = AdoClient.getInstance();
+      const encodedPath = path.split("\\").map(encodeURIComponent).join("/");
+      return client.request("PATCH", `wit/classificationnodes/${nodeType}/${encodedPath}`, {
+        project: client.resolveProject(project),
+        body: {
+          name,
+          attributes: (startDate || finishDate) ? { startDate, finishDate } : undefined
+        }
+      });
+    }
+  );
+
+  registerTool(
+    server,
+    "delete_classification_node",
+    "Delete an area or iteration node. Items are reclassified to reclassifyId.",
+    {
+      ...projectArg,
+      nodeType: z.enum(["areas", "iterations"]),
+      path: z.string(),
+      reclassifyId: z.number().int().positive().describe("Node ID to move orphaned work items to.")
+    },
+    async ({ project, nodeType, path, reclassifyId }) => {
+      const client = AdoClient.getInstance();
+      const encodedPath = path.split("\\").map(encodeURIComponent).join("/");
+      return client.request("DELETE", `wit/classificationnodes/${nodeType}/${encodedPath}`, {
+        project: client.resolveProject(project),
+        query: { "$reclassifyId": reclassifyId }
+      });
+    }
+  );
+
+  registerTool(
+    server,
+    "list_work_item_templates",
+    "List work item templates for a team.",
+    {
+      ...projectArg,
+      team: z.string().optional(),
+      workItemTypeName: z.string().optional()
+    },
+    async ({ project, team, workItemTypeName }) => {
+      const client = AdoClient.getInstance();
+      return client.request("GET", "wit/templates", {
+        routePrefix: client.route(project, team),
+        query: { workItemTypeName }
+      });
+    }
+  );
+
+  registerTool(
+    server,
     "list_work_items_cross_project",
     "Query work items across multiple projects using WIQL. Designed for large-org use.",
     {

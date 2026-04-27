@@ -106,10 +106,19 @@ export class AdoClient {
     return segments.map(encodeRouteSegment).join("/");
   }
 
-  resourceUrl(host: "almsearch" | "auditservice" | "feeds" | "vsrm", path: string, project?: string): string {
+  resourceUrl(
+    host: "almsearch" | "auditservice" | "feeds" | "vsrm" | "vssps" | "vsaex",
+    path: string,
+    project?: string
+  ): string {
     const cleanPath = path.replace(/^\/+/, "");
     const projectPart = project ? `/${encodeRouteSegment(project)}` : "";
     return `https://${host}.dev.azure.com/${encodeRouteSegment(this.config.organization)}${projectPart}/_apis/${cleanPath}`;
+  }
+
+  analyticsUrl(entity: string, project?: string, apiVersion = "v4.0-preview"): string {
+    const projectPart = project ? `/${encodeRouteSegment(project)}` : "";
+    return `https://analytics.dev.azure.com/${encodeRouteSegment(this.config.organization)}${projectPart}/_odata/${apiVersion}/${entity}`;
   }
 
   async request<T = unknown>(
