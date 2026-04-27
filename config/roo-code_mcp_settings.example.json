@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "azure-devops": {
+      "command": "node",
+      "args": [
+        "/absolute/path/to/azure-devops-mcp-server/dist/index.js"
+      ],
+      "env": {
+        "DOTENV_CONFIG_PATH": "/absolute/path/to/azure-devops-mcp-server/.env"
+      },
+      "disabled": false,
+      "alwaysAllow": []
+    }
+  }
+}

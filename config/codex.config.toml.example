@@ -1,0 +1,15 @@
+# Copy this block into ~/.codex/config.toml.
+# Codex MCP config reference:
+# https://developers.openai.com/codex/config-reference
+
+[mcp_servers.azure-devops]
+command = "node"
+args = ["/absolute/path/to/azure-devops-mcp-server/dist/index.js"]
+env = { DOTENV_CONFIG_PATH = "/absolute/path/to/azure-devops-mcp-server/.env" }
+startup_timeout_ms = 20000
+tool_timeout_sec = 120
+required = false
+
+# Optional: trust this repo for Codex local work.
+[projects."/absolute/path/to/azure-devops-mcp-server"]
+trust_level = "trusted"
