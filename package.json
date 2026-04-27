@@ -2,7 +2,16 @@
   "name": "azure-devops-mcp-server",
   "version": "1.0.0",
   "description": "Modular MCP server for complete Azure DevOps integration.",
+  "license": "Apache-2.0",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tiziano093/azure-devops-mcp-server.git"
+  },
+  "bugs": {
+    "url": "https://github.com/tiziano093/azure-devops-mcp-server/issues"
+  },
+  "homepage": "https://github.com/tiziano093/azure-devops-mcp-server#readme",
   "bin": {
     "azure-devops-mcp-server": "./dist/index.js"
   },
@@ -34,5 +43,12 @@
   },
   "engines": {
     "node": ">=20"
-  }
+  },
+  "keywords": [
+    "azure-devops",
+    "mcp",
+    "model-context-protocol",
+    "typescript",
+    "server"
+  ]
 }

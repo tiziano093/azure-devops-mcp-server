@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security report
+    url: https://github.com/tiziano093/azure-devops-mcp-server/security
+    about: Report vulnerabilities privately when GitHub Security Advisories are enabled.
