@@ -207,6 +207,52 @@ az containerapp create \
 - `src/tools/dashboards.ts`: dashboards and widgets.
 - `src/tools/security_audit.ts`: audit logs, security namespaces, ACLs, policies.
 
+## Claude Code (per-project, multi-org)
+
+Claude Code supports per-project MCP configuration via `.claude/settings.json` at the repository root. This enables working across multiple Azure DevOps organizations and projects — each repo gets its own server instance with its own credentials.
+
+**Step 1 — Build the server once:**
+
+```bash
+git clone https://github.com/tiziano093/azure-devops-mcp-server
+cd azure-devops-mcp-server
+npm install && npm run build
+```
+
+**Step 2 — Add `.claude/settings.json` to each project repo:**
+
+```json
+{
+  "mcpServers": {
+    "azure-devops": {
+      "command": "node",
+      "args": [
+        "/absolute/path/to/azure-devops-mcp-server/dist/index.js"
+      ],
+      "env": {
+        "DOTENV_CONFIG_PATH": "/absolute/path/to/your-project/.env"
+      }
+    }
+  }
+}
+```
+
+Use `config/claude_code_settings.example.json` as a starting template.
+
+**Step 3 — Create a `.env` at the project root (already gitignored):**
+
+```bash
+AZURE_DEVOPS_ORG=your-org
+AZURE_DEVOPS_PROJECT=your-default-project
+AZURE_DEVOPS_PAT=your-pat
+```
+
+Claude Code spawns the server automatically when the session starts. It stops when the session ends. No remote deployment required.
+
+**Multi-org:** each repo can point to a different org and PAT via its own `.env`. The `project` parameter can also be overridden per tool call without restarting the server.
+
+**Security:** never commit `.env`. The `.gitignore` in this repo already excludes `.env` and `.env.*`.
+
 ## Claude Desktop
 
 Use `config/claude_desktop_config.example.json` as a template. Point `command` to Node and `args` to the built server path.
@@ -219,6 +265,7 @@ Use `config/cursor.mcp.json` as a template.
 
 Config templates are under `config/`:
 
+- `claude_code_settings.example.json`: Claude Code CLI — per-project stdio config (recommended for multi-org).
 - `codex.config.toml.example`: OpenAI Codex CLI / IDE config block for `~/.codex/config.toml`.
 - `claude_desktop_config.example.json`: Claude Desktop.
 - `cursor.mcp.json`: Cursor.
@@ -228,7 +275,7 @@ Config templates are under `config/`:
 - `windsurf_mcp_config.example.json`: Windsurf.
 - `gemini_settings.example.json`: Gemini CLI.
 
-All templates use `DOTENV_CONFIG_PATH` so secrets can stay in `.env` instead of agent config files.
+All templates use `DOTENV_CONFIG_PATH` so secrets stay in `.env` instead of agent config files.
 
 For Codex specifically, the example file includes a local `stdio` configuration. If you deploy this server to Azure, switch that block to `url` plus `bearer_token_env_var` as shown above.
 
