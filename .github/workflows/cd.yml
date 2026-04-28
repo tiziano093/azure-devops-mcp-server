@@ -36,7 +36,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -102,14 +102,14 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Azure login
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Ensure resource group exists
-        uses: azure/cli@v2
+        uses: azure/cli@v3
         with:
           inlineScript: |
             az group create \
@@ -120,7 +120,7 @@ jobs:
 
       - name: Deploy Bicep template
         id: deploy
-        uses: azure/cli@v2
+        uses: azure/cli@v3
         with:
           inlineScript: |
             RESULT=$(az deployment group create \
@@ -162,7 +162,7 @@ jobs:
 
     steps:
       - name: Azure login
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -170,7 +170,7 @@ jobs:
 
       - name: Save current image for potential rollback
         id: save-previous
-        uses: azure/cli@v2
+        uses: azure/cli@v3
         with:
           inlineScript: |
             CURRENT=$(az containerapp show \
@@ -181,7 +181,7 @@ jobs:
             echo "image=${CURRENT}" >> "$GITHUB_OUTPUT"
 
       - name: Update Container App image
-        uses: azure/cli@v2
+        uses: azure/cli@v3
         with:
           inlineScript: |
             az containerapp update \
@@ -191,7 +191,7 @@ jobs:
               --output none
 
       - name: Update runtime secrets
-        uses: azure/cli@v2
+        uses: azure/cli@v3
         with:
           inlineScript: |
             az containerapp secret set \
@@ -203,7 +203,7 @@ jobs:
               --output none
 
       - name: Update environment variables
-        uses: azure/cli@v2
+        uses: azure/cli@v3
         with:
           inlineScript: |
             az containerapp update \
@@ -231,7 +231,7 @@ jobs:
 
     steps:
       - name: Azure login
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -239,7 +239,7 @@ jobs:
 
       - name: Resolve health check URL
         id: url
-        uses: azure/cli@v2
+        uses: azure/cli@v3
         with:
           inlineScript: |
             FQDN=$(az containerapp show \
@@ -278,14 +278,14 @@ jobs:
 
     steps:
       - name: Azure login
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Rollback to previous image
-        uses: azure/cli@v2
+        uses: azure/cli@v3
         with:
           inlineScript: |
             PREVIOUS="${{ needs.deploy.outputs.previous-image }}"
