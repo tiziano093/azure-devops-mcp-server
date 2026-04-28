@@ -10,6 +10,16 @@ startup_timeout_ms = 20000
 tool_timeout_sec = 120
 required = false
 
+# Alternative: remote HTTP deployment, for example on Azure Container Apps.
+# In that case remove the local stdio block above and use this instead.
+#
+# [mcp_servers.azure-devops]
+# url = "https://your-container-app.region.azurecontainerapps.io/mcp"
+# bearer_token_env_var = "AZURE_DEVOPS_MCP_AUTH_TOKEN"
+# startup_timeout_ms = 20000
+# tool_timeout_sec = 120
+# required = false
+
 # Optional: trust this repo for Codex local work.
 [projects."/absolute/path/to/azure-devops-mcp-server"]
 trust_level = "trusted"

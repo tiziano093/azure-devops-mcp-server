@@ -94,12 +94,54 @@ Authorization: Bearer <MCP_AUTH_TOKEN>
 
 Use `node dist/index.js` as the container command if you need stdio mode.
 
+## Deploy On Azure For Codex
+
+Yes. This server can run on Azure and be consumed by Codex on your local machine over MCP streamable HTTP.
+
+This repository already includes the pieces needed for that setup:
+
+- `src/http.ts` exposes a remote MCP endpoint at `POST/GET /mcp`
+- HTTP mode requires `MCP_AUTH_TOKEN` unless you explicitly allow unauthenticated access
+- Codex supports MCP servers configured with `url` and `bearer_token_env_var`
+
+Recommended topology:
+
+1. Deploy the Docker image to Azure Container Apps.
+2. Expose HTTPS ingress publicly or behind your preferred network controls.
+3. Store `AZURE_DEVOPS_PAT` and `MCP_AUTH_TOKEN` as Azure secrets.
+4. Point local Codex to the Azure URL instead of launching the server with `node`.
+
+Minimal local Codex config for a remote Azure deployment:
+
+```toml
+[mcp_servers.azure-devops]
+url = "https://your-container-app.region.azurecontainerapps.io/mcp"
+bearer_token_env_var = "AZURE_DEVOPS_MCP_AUTH_TOKEN"
+startup_timeout_ms = 20000
+tool_timeout_sec = 120
+required = false
+```
+
+Then export the bearer token locally before starting Codex:
+
+```bash
+export AZURE_DEVOPS_MCP_AUTH_TOKEN="replace-with-the-same-token-configured-in-azure"
+```
+
+Notes:
+
+- Keep `MCP_AUTH_TOKEN` different from `AZURE_DEVOPS_PAT`.
+- Prefer Azure Container Apps over App Service for the existing Docker-based flow in this repo.
+- Leave `MCP_ALLOW_UNAUTHENTICATED` unset in production.
+- Restrict ingress with IP allowlists, Front Door, APIM, or a private network if you do not want a public endpoint.
+- For browser-based clients, set `MCP_ALLOWED_ORIGINS` as needed. Codex desktop/CLI does not depend on CORS.
+
 ## GitHub Actions CI/CD
 
 Workflows are under `.github/workflows/`:
 
 - `ci.yml`: runs `npm ci`, `npm run typecheck`, `npm run build`, and `docker build`.
-- `cd.yml`: publishes the Docker image to GHCR on `main`, tags, or manual dispatch. If Azure Container App variables are configured, it deploys the image.
+- `cd.yml`: publishes the Docker image to GHCR on `main`, tags, or manual dispatch. If Azure Container App variables are configured, it deploys the image and smoke-tests `/healthz` plus authenticated MCP exposure.
 - `codeql.yml`: runs GitHub code scanning for JavaScript/TypeScript.
 
 Required GitHub repository variables for deploy:
@@ -187,6 +229,8 @@ Config templates are under `config/`:
 - `gemini_settings.example.json`: Gemini CLI.
 
 All templates use `DOTENV_CONFIG_PATH` so secrets can stay in `.env` instead of agent config files.
+
+For Codex specifically, the example file includes a local `stdio` configuration. If you deploy this server to Azure, switch that block to `url` plus `bearer_token_env_var` as shown above.
 
 ## Error Handling
 
