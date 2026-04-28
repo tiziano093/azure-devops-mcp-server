@@ -44,6 +44,84 @@ export function registerArtifactsTools(server: McpServer): void {
 
   registerTool(
     server,
+    "create_feed",
+    "Create a new Azure Artifacts feed.",
+    {
+      ...projectArg,
+      name: z.string(),
+      description: z.string().optional(),
+      hideDeletedPackageVersions: z.boolean().optional(),
+      upstreamEnabled: z.boolean().optional()
+    },
+    async ({ project, name, description, hideDeletedPackageVersions, upstreamEnabled }) => {
+      const client = AdoClient.getInstance();
+      const resolvedProject = client.resolveProject(project);
+      return client.request(
+        "POST",
+        client.resourceUrl("feeds", "packaging/feeds", resolvedProject),
+        {
+          project: null,
+          body: {
+            name,
+            description,
+            hideDeletedPackageVersions,
+            upstreamEnabled,
+            project: { id: resolvedProject }
+          }
+        }
+      );
+    }
+  );
+
+  registerTool(
+    server,
+    "update_feed",
+    "Update an Azure Artifacts feed.",
+    {
+      ...projectArg,
+      feedId: z.string(),
+      name: z.string().optional(),
+      description: z.string().optional(),
+      hideDeletedPackageVersions: z.boolean().optional(),
+      upstreamEnabled: z.boolean().optional(),
+      projectScoped: z.boolean().optional()
+    },
+    async ({ project, feedId, name, description, hideDeletedPackageVersions, upstreamEnabled, projectScoped }) => {
+      const client = AdoClient.getInstance();
+      const resolvedProject = projectScoped === false ? undefined : client.resolveProject(project);
+      return client.request(
+        "PATCH",
+        client.resourceUrl("feeds", `packaging/feeds/${encodeURIComponent(feedId)}`, resolvedProject),
+        {
+          project: null,
+          body: { name, description, hideDeletedPackageVersions, upstreamEnabled }
+        }
+      );
+    }
+  );
+
+  registerTool(
+    server,
+    "delete_feed",
+    "Delete an Azure Artifacts feed.",
+    {
+      ...projectArg,
+      feedId: z.string(),
+      projectScoped: z.boolean().optional()
+    },
+    async ({ project, feedId, projectScoped }) => {
+      const client = AdoClient.getInstance();
+      const resolvedProject = projectScoped === false ? undefined : client.resolveProject(project);
+      return client.request(
+        "DELETE",
+        client.resourceUrl("feeds", `packaging/feeds/${encodeURIComponent(feedId)}`, resolvedProject),
+        { project: null }
+      );
+    }
+  );
+
+  registerTool(
+    server,
     "list_packages",
     "List packages in an Azure Artifacts feed.",
     {

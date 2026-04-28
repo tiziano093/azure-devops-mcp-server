@@ -22,6 +22,42 @@ export function registerWikiTools(server: McpServer): void {
 
   registerTool(
     server,
+    "create_wiki",
+    "Create a new project or code wiki.",
+    {
+      ...projectArg,
+      name: z.string(),
+      type: z.enum(["projectWiki", "codeWiki"]).default("projectWiki"),
+      repositoryId: z.string().optional().describe("Required for codeWiki."),
+      mappedPath: z.string().optional().describe("Root path for codeWiki, e.g. /docs.")
+    },
+    async ({ project, name, type, repositoryId, mappedPath }) => {
+      const client = AdoClient.getInstance();
+      return client.request("POST", "wiki/wikis", {
+        project: client.resolveProject(project),
+        body: { name, type, projectId: client.resolveProject(project), repositoryId, mappedPath }
+      });
+    }
+  );
+
+  registerTool(
+    server,
+    "get_wiki",
+    "Get a wiki by identifier.",
+    {
+      ...projectArg,
+      wikiIdentifier: z.string()
+    },
+    async ({ project, wikiIdentifier }) => {
+      const client = AdoClient.getInstance();
+      return client.request("GET", `wiki/wikis/${encodeURIComponent(wikiIdentifier)}`, {
+        project: client.resolveProject(project)
+      });
+    }
+  );
+
+  registerTool(
+    server,
     "get_wiki_page_content",
     "Read wiki page content with ETag/version metadata.",
     {
@@ -91,6 +127,34 @@ export function registerWikiTools(server: McpServer): void {
         query: { path },
         headers: version ? { "If-Match": version } : undefined
       });
+    }
+  );
+
+  registerTool(
+    server,
+    "list_wiki_page_versions",
+    "List revision history for a wiki page.",
+    {
+      ...projectArg,
+      wikiIdentifier: z.string(),
+      path: z.string(),
+      top: z.number().int().positive().max(100).optional(),
+      continuationToken: z.string().optional()
+    },
+    async ({ project, wikiIdentifier, path, top, continuationToken }) => {
+      const client = AdoClient.getInstance();
+      const response = await client.requestWithMeta(
+        "GET",
+        `wiki/wikis/${encodeURIComponent(wikiIdentifier)}/pagesbatch`,
+        {
+          project: client.resolveProject(project),
+          query: { path, "$top": top ?? 20, continuationToken }
+        }
+      );
+      return {
+        versions: response.data,
+        continuationToken: response.continuationToken
+      };
     }
   );
 

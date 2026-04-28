@@ -80,22 +80,30 @@ export function registerSecurityAuditTools(server: McpServer): void {
 
   registerTool(
     server,
-    "list_policy_configurations",
-    "List branch/repository policy configurations.",
+    "update_access_control_entries",
+    "Set or update access control entries (ACEs) on a security namespace token.",
     {
-      ...projectArg,
-      repositoryId: z.string().optional(),
-      policyType: z.string().optional(),
-      top: z.number().int().positive().max(1000).optional()
+      securityNamespaceId: z.string(),
+      token: z.string(),
+      merge: z.boolean().default(true).describe("Merge with existing ACEs rather than replace."),
+      accessControlEntries: z.array(z.object({
+        descriptor: z.string().describe("Identity descriptor."),
+        allow: z.number().int().optional(),
+        deny: z.number().int().optional()
+      }))
     },
-    async ({ project, repositoryId, policyType, top }) => {
+    async ({ securityNamespaceId, token, merge, accessControlEntries }) => {
       const client = AdoClient.getInstance();
-      return client.request("GET", "policy/configurations", {
-        project: client.resolveProject(project),
-        query: {
-          repositoryId,
-          policyType,
-          "$top": normalizeTop(top, 100, 1000)
+      return client.request("POST", `accesscontrollists/${encodeURIComponent(securityNamespaceId)}`, {
+        project: null,
+        body: {
+          token,
+          merge,
+          accessControlEntries: accessControlEntries.map((ace) => ({
+            descriptor: ace.descriptor,
+            allow: ace.allow ?? 0,
+            deny: ace.deny ?? 0
+          }))
         }
       });
     }
@@ -103,16 +111,21 @@ export function registerSecurityAuditTools(server: McpServer): void {
 
   registerTool(
     server,
-    "get_policy_configuration",
-    "Get one policy configuration.",
+    "remove_access_control_entries",
+    "Remove ACEs for specific descriptors from a token.",
     {
-      ...projectArg,
-      configurationId: z.number().int().positive()
+      securityNamespaceId: z.string(),
+      token: z.string(),
+      descriptors: z.array(z.string()).min(1)
     },
-    async ({ project, configurationId }) => {
+    async ({ securityNamespaceId, token, descriptors }) => {
       const client = AdoClient.getInstance();
-      return client.request("GET", `policy/configurations/${configurationId}`, {
-        project: client.resolveProject(project)
+      return client.request("DELETE", `accesscontrollists/${encodeURIComponent(securityNamespaceId)}`, {
+        project: null,
+        query: {
+          token,
+          descriptors: descriptors.join(",")
+        }
       });
     }
   );

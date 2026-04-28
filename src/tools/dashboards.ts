@@ -55,6 +55,71 @@ export function registerDashboardsTools(server: McpServer): void {
 
   registerTool(
     server,
+    "create_dashboard",
+    "Create a team dashboard.",
+    {
+      ...projectArg,
+      team: z.string().optional(),
+      name: z.string(),
+      description: z.string().optional()
+    },
+    async ({ project, team, name, description }) => {
+      const client = AdoClient.getInstance();
+      return client.request("POST", "dashboard/dashboards", {
+        routePrefix: client.route(project, team),
+        body: { name, description }
+      });
+    }
+  );
+
+  registerTool(
+    server,
+    "update_dashboard",
+    "Update a team dashboard (rename or change description).",
+    {
+      ...projectArg,
+      team: z.string().optional(),
+      dashboardId: z.string(),
+      name: z.string().optional(),
+      description: z.string().optional()
+    },
+    async ({ project, team, dashboardId, name, description }) => {
+      const client = AdoClient.getInstance();
+      const current = await client.request<Record<string, unknown>>(
+        "GET",
+        `dashboard/dashboards/${encodeURIComponent(dashboardId)}`,
+        { routePrefix: client.route(project, team) }
+      );
+      return client.request("PUT", `dashboard/dashboards/${encodeURIComponent(dashboardId)}`, {
+        routePrefix: client.route(project, team),
+        body: {
+          ...current,
+          name: name ?? current.name,
+          description: description ?? current.description
+        }
+      });
+    }
+  );
+
+  registerTool(
+    server,
+    "delete_dashboard",
+    "Delete a team dashboard.",
+    {
+      ...projectArg,
+      team: z.string().optional(),
+      dashboardId: z.string()
+    },
+    async ({ project, team, dashboardId }) => {
+      const client = AdoClient.getInstance();
+      return client.request("DELETE", `dashboard/dashboards/${encodeURIComponent(dashboardId)}`, {
+        routePrefix: client.route(project, team)
+      });
+    }
+  );
+
+  registerTool(
+    server,
     "list_widgets",
     "List widgets in a dashboard.",
     {

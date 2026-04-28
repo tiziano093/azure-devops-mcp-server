@@ -7,6 +7,14 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: false
+        default: "production"
+        type: choice
+        options:
+          - production
 
 permissions:
   contents: read
@@ -15,15 +23,16 @@ permissions:
 
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository }}
-  IMAGE_TAG: sha-${{ github.sha }}
 
 jobs:
+  # ─── 1. Build & push Docker image ───────────────────────────────────────────
   publish:
-    name: Publish image
+    name: Build and push image
     runs-on: ubuntu-latest
 
     outputs:
-      image: ${{ steps.image.outputs.image }}
+      image: ${{ steps.meta.outputs.image }}
+      sha-tag: ${{ steps.meta.outputs.sha-tag }}
 
     steps:
       - name: Checkout
@@ -39,24 +48,117 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Compute image tags
+        id: meta
+        run: |
+          SHA_TAG="sha-${{ github.sha }}"
+          echo "sha-tag=${SHA_TAG}" >> "$GITHUB_OUTPUT"
+
+          # Build the full tag list: sha + latest, plus semver for version tags
+          TAGS="${{ env.IMAGE_NAME }}:${SHA_TAG}"
+          TAGS="${TAGS},${{ env.IMAGE_NAME }}:latest"
+
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            VERSION="${{ github.ref_name }}"
+            TAGS="${TAGS},${{ env.IMAGE_NAME }}:${VERSION}"
+            # Also tag major.minor (e.g. v1.2.3 → v1.2)
+            MINOR_TAG="$(echo "${VERSION}" | sed -E 's/^(v[0-9]+\.[0-9]+)\..*/\1/')"
+            if [[ "${MINOR_TAG}" != "${VERSION}" ]]; then
+              TAGS="${TAGS},${{ env.IMAGE_NAME }}:${MINOR_TAG}"
+            fi
+          fi
+
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+          echo "image=${{ env.IMAGE_NAME }}:${SHA_TAG}" >> "$GITHUB_OUTPUT"
+
       - name: Build and push image
         uses: docker/build-push-action@v7
         with:
           context: .
           push: true
-          tags: |
-            ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
-            ${{ env.IMAGE_NAME }}:latest
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ github.ref_name }}
 
-      - name: Export image
-        id: image
-        run: echo "image=${IMAGE_NAME}:${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
-
-  deploy-azure-container-app:
-    name: Deploy Azure Container App
+  # ─── 2. Provision Azure infrastructure (idempotent Bicep) ───────────────────
+  provision:
+    name: Provision Azure infrastructure
     runs-on: ubuntu-latest
     needs: publish
-    if: ${{ vars.AZURE_CONTAINER_APP_NAME != '' && vars.AZURE_RESOURCE_GROUP != '' }}
+    if: >
+      vars.AZURE_CONTAINER_APP_NAME != '' &&
+      vars.AZURE_RESOURCE_GROUP != ''
+
+    outputs:
+      fqdn: ${{ steps.deploy.outputs.fqdn }}
+      health-url: ${{ steps.deploy.outputs.health-url }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Ensure resource group exists
+        uses: azure/cli@v3
+        with:
+          inlineScript: |
+            az group create \
+              --name "${{ vars.AZURE_RESOURCE_GROUP }}" \
+              --location "${{ vars.AZURE_LOCATION || 'westeurope' }}" \
+              --tags "managed-by=github-actions" "repo=${{ github.repository }}" \
+              --output none
+
+      - name: Deploy Bicep template
+        id: deploy
+        uses: azure/cli@v3
+        with:
+          inlineScript: |
+            RESULT=$(az deployment group create \
+              --name "mcp-$(date +%Y%m%d%H%M%S)" \
+              --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+              --template-file infra/main.bicep \
+              --parameters \
+                containerAppName="${{ vars.AZURE_CONTAINER_APP_NAME }}" \
+                imageName="${{ needs.publish.outputs.image }}" \
+                azureDevOpsOrg="${{ secrets.AZURE_DEVOPS_ORG }}" \
+                azureDevOpsPat="${{ secrets.AZURE_DEVOPS_PAT }}" \
+                azureDevOpsProject="${{ secrets.AZURE_DEVOPS_PROJECT || '' }}" \
+                mcpAuthToken="${{ secrets.MCP_AUTH_TOKEN }}" \
+                ghcrUsername="${{ github.repository_owner }}" \
+                ghcrToken="${{ secrets.GHCR_TOKEN }}" \
+              --output json)
+
+            FQDN=$(echo "$RESULT" | jq -r '.properties.outputs.fqdn.value')
+            HEALTH_URL=$(echo "$RESULT" | jq -r '.properties.outputs.healthUrl.value')
+
+            echo "fqdn=${FQDN}" >> "$GITHUB_OUTPUT"
+            echo "health-url=${HEALTH_URL}" >> "$GITHUB_OUTPUT"
+            echo "Deployed to: https://${FQDN}/mcp"
+
+  # ─── 3. Deploy new image to existing Container App ──────────────────────────
+  deploy:
+    name: Deploy image
+    runs-on: ubuntu-latest
+    needs: [publish, provision]
+    if: >
+      always() &&
+      needs.publish.result == 'success' &&
+      (needs.provision.result == 'success' || needs.provision.result == 'skipped') &&
+      vars.AZURE_CONTAINER_APP_NAME != '' &&
+      vars.AZURE_RESOURCE_GROUP != ''
+
+    outputs:
+      previous-image: ${{ steps.save-previous.outputs.image }}
 
     steps:
       - name: Azure login
@@ -66,18 +168,29 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Configure registry credentials
+      - name: Save current image for potential rollback
+        id: save-previous
         uses: azure/cli@v3
         with:
           inlineScript: |
-            az containerapp registry set \
+            CURRENT=$(az containerapp show \
               --name "${{ vars.AZURE_CONTAINER_APP_NAME }}" \
               --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
-              --server ghcr.io \
-              --username "${{ github.repository_owner }}" \
-              --password "${{ secrets.GHCR_TOKEN }}"
+              --query "properties.template.containers[0].image" \
+              --output tsv 2>/dev/null || echo "")
+            echo "image=${CURRENT}" >> "$GITHUB_OUTPUT"
 
-      - name: Set runtime secrets
+      - name: Update Container App image
+        uses: azure/cli@v3
+        with:
+          inlineScript: |
+            az containerapp update \
+              --name "${{ vars.AZURE_CONTAINER_APP_NAME }}" \
+              --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+              --image "${{ needs.publish.outputs.image }}" \
+              --output none
+
+      - name: Update runtime secrets
         uses: azure/cli@v3
         with:
           inlineScript: |
@@ -86,9 +199,10 @@ jobs:
               --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
               --secrets \
                 azure-devops-pat="${{ secrets.AZURE_DEVOPS_PAT }}" \
-                mcp-auth-token="${{ secrets.MCP_AUTH_TOKEN }}"
+                mcp-auth-token="${{ secrets.MCP_AUTH_TOKEN }}" \
+              --output none
 
-      - name: Deploy image
+      - name: Update environment variables
         uses: azure/cli@v3
         with:
           inlineScript: |
@@ -99,6 +213,8 @@ jobs:
               "AZURE_DEVOPS_PROJECT=${{ secrets.AZURE_DEVOPS_PROJECT }}"
               "AZURE_DEVOPS_PAT=secretref:azure-devops-pat"
               "MCP_AUTH_TOKEN=secretref:mcp-auth-token"
+              "CACHE_TTL_SECONDS=60"
+              "CACHE_MAX_SIZE=500"
             )
 
             if [ -n "${{ secrets.AZURE_DEVOPS_ORG_URL }}" ]; then
@@ -108,45 +224,95 @@ jobs:
             az containerapp update \
               --name "${{ vars.AZURE_CONTAINER_APP_NAME }}" \
               --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
-              --image "${{ needs.publish.outputs.image }}" \
-              --set-env-vars "${ENV_VARS[@]}"
+              --set-env-vars "${ENV_VARS[@]}" \
+              --output none
 
-      - name: Smoke test deployment
+  # ─── 4. Post-deployment health check ────────────────────────────────────────
+  verify:
+    name: Verify deployment
+    runs-on: ubuntu-latest
+    needs: [provision, deploy]
+    if: >
+      always() &&
+      needs.deploy.result == 'success'
+
+    steps:
+      - name: Azure login
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Resolve health check URL
+        id: url
         uses: azure/cli@v3
         with:
           inlineScript: |
-            FQDN="$(az containerapp show \
+            FQDN=$(az containerapp show \
               --name "${{ vars.AZURE_CONTAINER_APP_NAME }}" \
               --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
-              --query properties.configuration.ingress.fqdn \
-              --output tsv)"
+              --query "properties.configuration.ingress.fqdn" \
+              --output tsv)
+            echo "health-url=https://${FQDN}/healthz" >> "$GITHUB_OUTPUT"
+            echo "mcp-url=https://${FQDN}/mcp" >> "$GITHUB_OUTPUT"
 
-            if [ -z "$FQDN" ]; then
-              echo "Azure Container App does not expose an ingress FQDN."
-              exit 1
-            fi
-
-            HEALTH_URL="https://$FQDN/healthz"
-            MCP_URL="https://$FQDN/mcp"
-
-            for attempt in $(seq 1 20); do
-              health_code="$(curl -sS -o /tmp/healthz-response.txt -w '%{http_code}' "$HEALTH_URL" || true)"
-              if [ "$health_code" = "200" ]; then
-                break
-              fi
-
-              if [ "$attempt" -eq 20 ]; then
-                echo "Health check failed with status: ${health_code:-none}"
-                cat /tmp/healthz-response.txt 2>/dev/null || true
+      - name: Poll /healthz until ready (90 s timeout)
+        id: healthcheck
+        run: |
+          URL="${{ steps.url.outputs.health-url }}"
+          MCP_URL="${{ steps.url.outputs.mcp-url }}"
+          echo "Polling ${URL} ..."
+          for i in $(seq 1 18); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "${URL}" || echo "000")
+            echo "Attempt ${i}: HTTP ${STATUS}"
+            if [ "${STATUS}" = "200" ]; then
+              echo "Health check passed."
+              MCP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "${MCP_URL}" || echo "000")
+              if [ "${MCP_STATUS}" != "401" ]; then
+                echo "MCP endpoint check failed: expected 401, got ${MCP_STATUS}"
                 exit 1
               fi
-
-              sleep 15
-            done
-
-            mcp_code="$(curl -sS -o /tmp/mcp-response.txt -w '%{http_code}' "$MCP_URL" || true)"
-            if [ "$mcp_code" != "401" ]; then
-              echo "Expected unauthenticated MCP endpoint to return 401, got: ${mcp_code:-none}"
-              cat /tmp/mcp-response.txt 2>/dev/null || true
-              exit 1
+              echo "MCP endpoint check passed."
+              exit 0
             fi
+            sleep 5
+          done
+          echo "Health check failed after 90 seconds."
+          exit 1
+
+  # ─── 5. Rollback on failed health check ─────────────────────────────────────
+  rollback:
+    name: Rollback on failure
+    runs-on: ubuntu-latest
+    needs: [deploy, verify]
+    if: >
+      always() &&
+      needs.verify.result == 'failure' &&
+      needs.deploy.outputs.previous-image != ''
+
+    steps:
+      - name: Azure login
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Rollback to previous image
+        uses: azure/cli@v3
+        with:
+          inlineScript: |
+            PREVIOUS="${{ needs.deploy.outputs.previous-image }}"
+            echo "Rolling back to: ${PREVIOUS}"
+            az containerapp update \
+              --name "${{ vars.AZURE_CONTAINER_APP_NAME }}" \
+              --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+              --image "${PREVIOUS}" \
+              --output none
+            echo "Rollback complete."
+
+      - name: Fail pipeline after rollback
+        run: |
+          echo "Deployment health check failed. Rolled back to previous image."
+          exit 1

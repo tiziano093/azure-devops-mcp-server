@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import { AdoClient } from "../services/ado-client.js";
-import { csv, normalizeTop, projectArg, registerTool, wiqlQuote } from "./common.js";
+import { chunk, normalizeTop, projectArg, registerTool, wiqlQuote } from "./common.js";
 
 const expandWorkItem = z.enum(["none", "relations", "fields", "links", "all"]).optional();
 
@@ -15,7 +15,7 @@ export function registerBoardsTools(server: McpServer): void {
       ...projectArg,
       query: z.string().describe("Full WIQL query."),
       fields: z.array(z.string()).optional(),
-      top: z.number().int().positive().max(1000).optional(),
+      top: z.number().int().positive().max(20000).optional(),
       expand: expandWorkItem
     },
     async ({ project, query, fields, top, expand }) => {
@@ -23,7 +23,7 @@ export function registerBoardsTools(server: McpServer): void {
       const resolvedProject = client.resolveProject(project);
       const wiql = await client.request<{ workItems?: Array<{ id: number }> }>("POST", "wit/wiql", {
         project: resolvedProject,
-        query: { "$top": normalizeTop(top, 100, 1000) },
+        query: { "$top": normalizeTop(top, 100, 20000) },
         body: { query }
       });
       const ids = (wiql.workItems ?? []).map((item) => item.id);
@@ -39,10 +39,10 @@ export function registerBoardsTools(server: McpServer): void {
   registerTool(
     server,
     "batch_get_work_items",
-    "Fetch many work items by ID using the Azure DevOps batch API.",
+    "Fetch many work items by ID using the Azure DevOps batch API. Handles large batches automatically.",
     {
       ...projectArg,
-      ids: z.array(z.number().int().positive()).min(1).max(2000),
+      ids: z.array(z.number().int().positive()).min(1),
       fields: z.array(z.string()).optional(),
       expand: expandWorkItem
     },
@@ -260,7 +260,7 @@ export function registerBoardsTools(server: McpServer): void {
       areaPath: z.string().optional(),
       workItemTypes: z.array(z.string()).optional(),
       fields: z.array(z.string()).optional(),
-      top: z.number().int().positive().max(1000).optional()
+      top: z.number().int().positive().max(20000).optional()
     },
     async ({ project, areaPath, workItemTypes, fields, top }) => {
       const client = AdoClient.getInstance();
@@ -280,7 +280,7 @@ ORDER BY [Microsoft.VSTS.Common.Priority] ASC, [System.CreatedDate] DESC`;
 
       const wiql = await client.request<{ workItems?: Array<{ id: number }> }>("POST", "wit/wiql", {
         project: resolvedProject,
-        query: { "$top": normalizeTop(top, 100, 1000) },
+        query: { "$top": normalizeTop(top, 100, 20000) },
         body: { query }
       });
       const ids = (wiql.workItems ?? []).map((item) => item.id);
@@ -296,7 +296,7 @@ ORDER BY [Microsoft.VSTS.Common.Priority] ASC, [System.CreatedDate] DESC`;
       ...projectArg,
       team: z.string().optional(),
       fields: z.array(z.string()).optional(),
-      top: z.number().int().positive().max(1000).optional(),
+      top: z.number().int().positive().max(20000).optional(),
       expand: expandWorkItem
     },
     async ({ project, team, fields, top, expand }) => {
@@ -327,7 +327,7 @@ WHERE [System.TeamProject] = ${wiqlQuote(resolvedProject)}
 ORDER BY [Microsoft.VSTS.Common.Priority] ASC, [System.ChangedDate] DESC`;
       const wiql = await client.request<{ workItems?: Array<{ id: number }> }>("POST", "wit/wiql", {
         project: resolvedProject,
-        query: { "$top": normalizeTop(top, 100, 1000) },
+        query: { "$top": normalizeTop(top, 100, 20000) },
         body: { query }
       });
       const ids = (wiql.workItems ?? []).map((item) => item.id);
@@ -366,7 +366,7 @@ ORDER BY [Microsoft.VSTS.Common.Priority] ASC, [System.ChangedDate] DESC`;
       ...projectArg,
       team: z.string().optional(),
       boardName: z.string().optional(),
-      top: z.number().int().positive().max(1000).optional()
+      top: z.number().int().positive().max(20000).optional()
     },
     async ({ project, team, boardName, top }) => {
       const client = AdoClient.getInstance();
@@ -403,7 +403,7 @@ WHERE [System.TeamProject] = ${wiqlQuote(resolvedProject)}
 ORDER BY [System.ChangedDate] DESC`;
       const wiql = await client.request<{ workItems?: Array<{ id: number }> }>("POST", "wit/wiql", {
         project: resolvedProject,
-        query: { "$top": normalizeTop(top, 500, 1000) },
+        query: { "$top": normalizeTop(top, 500, 20000) },
         body: { query }
       });
       const ids = (wiql.workItems ?? []).map((item) => item.id);
@@ -473,9 +473,272 @@ ORDER BY [System.ChangedDate] DESC`;
       });
     }
   );
+
+  registerTool(
+    server,
+    "delete_work_item",
+    "Move a work item to the recycle bin.",
+    {
+      ...projectArg,
+      id: z.number().int().positive(),
+      destroy: z.boolean().optional().describe("If true, permanently deletes instead of recycling.")
+    },
+    async ({ project, id, destroy }) => {
+      const client = AdoClient.getInstance();
+      return client.request("DELETE", `wit/workitems/${id}`, {
+        project: client.resolveProject(project),
+        query: { destroy }
+      });
+    }
+  );
+
+  registerTool(
+    server,
+    "list_recycle_bin",
+    "List work items in the recycle bin.",
+    {
+      ...projectArg,
+      top: z.number().int().positive().max(200).optional()
+    },
+    async ({ project, top }) => {
+      const client = AdoClient.getInstance();
+      return client.request("GET", "wit/recyclebin", {
+        project: client.resolveProject(project),
+        query: { "$top": top ?? 100 }
+      });
+    }
+  );
+
+  registerTool(
+    server,
+    "restore_work_item",
+    "Restore a work item from the recycle bin.",
+    {
+      ...projectArg,
+      id: z.number().int().positive()
+    },
+    async ({ project, id }) => {
+      const client = AdoClient.getInstance();
+      return client.request("PATCH", `wit/recyclebin/${id}`, {
+        project: client.resolveProject(project),
+        body: { isDeleted: false }
+      });
+    }
+  );
+
+  registerTool(
+    server,
+    "manage_work_item_links",
+    "Add or remove links (parent, child, related, duplicate) between work items.",
+    {
+      ...projectArg,
+      id: z.number().int().positive(),
+      links: z.array(z.object({
+        op: z.enum(["add", "remove"]),
+        rel: z.string().describe("Relation type: System.LinkTypes.Hierarchy-Forward (child), System.LinkTypes.Hierarchy-Reverse (parent), System.LinkTypes.Related, System.LinkTypes.Duplicate-Forward."),
+        targetId: z.number().int().positive(),
+        comment: z.string().optional()
+      }))
+    },
+    async ({ project, id, links }) => {
+      const client = AdoClient.getInstance();
+      const patch = links.map((link) => ({
+        op: link.op,
+        path: "/relations/-",
+        value: {
+          rel: link.rel,
+          url: `${client.config.organizationUrl}/_apis/wit/workItems/${link.targetId}`,
+          attributes: link.comment ? { comment: link.comment } : undefined
+        }
+      }));
+      return client.request("PATCH", `wit/workitems/${id}`, {
+        project: client.resolveProject(project),
+        body: patch
+      });
+    }
+  );
+
+  registerTool(
+    server,
+    "bulk_update_work_items",
+    "Update multiple work items in a single operation. Each entry specifies an ID and fields/state to update.",
+    {
+      ...projectArg,
+      updates: z.array(z.object({
+        id: z.number().int().positive(),
+        fields: z.record(z.unknown()).optional(),
+        state: z.string().optional(),
+        assignedTo: z.string().optional(),
+        iterationPath: z.string().optional()
+      })).min(1).max(200)
+    },
+    async ({ project, updates }) => {
+      const client = AdoClient.getInstance();
+      const resolvedProject = client.resolveProject(project);
+      const results = await Promise.allSettled(
+        updates.map(({ id, fields, state, assignedTo, iterationPath }) => {
+          const patch = [
+            ...(state ? [{ op: "replace", path: "/fields/System.State", value: state }] : []),
+            ...(assignedTo ? [{ op: "replace", path: "/fields/System.AssignedTo", value: assignedTo }] : []),
+            ...(iterationPath ? [{ op: "replace", path: "/fields/System.IterationPath", value: iterationPath }] : []),
+            ...Object.entries(fields ?? {}).map(([field, value]) => ({ op: "add", path: `/fields/${field}`, value }))
+          ];
+          if (!patch.length) return Promise.resolve({ id, skipped: true });
+          return client.request("PATCH", `wit/workitems/${id}`, {
+            project: resolvedProject,
+            body: patch
+          });
+        })
+      );
+      return {
+        total: updates.length,
+        succeeded: results.filter((r) => r.status === "fulfilled").length,
+        failed: results.filter((r) => r.status === "rejected").length,
+        results: results.map((r, i) => ({
+          id: updates[i].id,
+          status: r.status,
+          value: r.status === "fulfilled" ? r.value : undefined,
+          error: r.status === "rejected" ? String(r.reason) : undefined
+        }))
+      };
+    }
+  );
+
+  registerTool(
+    server,
+    "create_classification_node",
+    "Create an area path or iteration path node.",
+    {
+      ...projectArg,
+      nodeType: z.enum(["areas", "iterations"]),
+      path: z.string().describe("Parent path, e.g. 'MyProject\\Team A' (use \\\\ in JSON)."),
+      name: z.string(),
+      startDate: z.string().optional().describe("For iterations only."),
+      finishDate: z.string().optional().describe("For iterations only.")
+    },
+    async ({ project, nodeType, path, name, startDate, finishDate }) => {
+      const client = AdoClient.getInstance();
+      const encodedPath = path.split("\\").map(encodeURIComponent).join("/");
+      return client.request("POST", `wit/classificationnodes/${nodeType}/${encodedPath}`, {
+        project: client.resolveProject(project),
+        body: {
+          name,
+          attributes: (startDate || finishDate) ? { startDate, finishDate } : undefined
+        }
+      });
+    }
+  );
+
+  registerTool(
+    server,
+    "update_classification_node",
+    "Rename an area/iteration node or update iteration dates.",
+    {
+      ...projectArg,
+      nodeType: z.enum(["areas", "iterations"]),
+      path: z.string().describe("Full path including the node name."),
+      name: z.string().optional(),
+      startDate: z.string().optional(),
+      finishDate: z.string().optional()
+    },
+    async ({ project, nodeType, path, name, startDate, finishDate }) => {
+      const client = AdoClient.getInstance();
+      const encodedPath = path.split("\\").map(encodeURIComponent).join("/");
+      return client.request("PATCH", `wit/classificationnodes/${nodeType}/${encodedPath}`, {
+        project: client.resolveProject(project),
+        body: {
+          name,
+          attributes: (startDate || finishDate) ? { startDate, finishDate } : undefined
+        }
+      });
+    }
+  );
+
+  registerTool(
+    server,
+    "delete_classification_node",
+    "Delete an area or iteration node. Items are reclassified to reclassifyId.",
+    {
+      ...projectArg,
+      nodeType: z.enum(["areas", "iterations"]),
+      path: z.string(),
+      reclassifyId: z.number().int().positive().describe("Node ID to move orphaned work items to.")
+    },
+    async ({ project, nodeType, path, reclassifyId }) => {
+      const client = AdoClient.getInstance();
+      const encodedPath = path.split("\\").map(encodeURIComponent).join("/");
+      return client.request("DELETE", `wit/classificationnodes/${nodeType}/${encodedPath}`, {
+        project: client.resolveProject(project),
+        query: { "$reclassifyId": reclassifyId }
+      });
+    }
+  );
+
+  registerTool(
+    server,
+    "list_work_item_templates",
+    "List work item templates for a team.",
+    {
+      ...projectArg,
+      team: z.string().optional(),
+      workItemTypeName: z.string().optional()
+    },
+    async ({ project, team, workItemTypeName }) => {
+      const client = AdoClient.getInstance();
+      return client.request("GET", "wit/templates", {
+        routePrefix: client.route(project, team),
+        query: { workItemTypeName }
+      });
+    }
+  );
+
+  registerTool(
+    server,
+    "list_work_items_cross_project",
+    "Query work items across multiple projects using WIQL. Designed for large-org use.",
+    {
+      projects: z.array(z.string()).min(1).describe("List of project names to query."),
+      query: z.string().describe("WIQL query. Use [System.TeamProject] IN (...) or omit team project filter."),
+      fields: z.array(z.string()).optional(),
+      top: z.number().int().positive().max(20000).optional(),
+      expand: expandWorkItem
+    },
+    async ({ projects, query, fields, top, expand }) => {
+      const client = AdoClient.getInstance();
+      const projectList = projects.map(wiqlQuote).join(", ");
+      const fullQuery = query.includes("[System.TeamProject]")
+        ? query
+        : `${query.replace(/WHERE/i, `WHERE [System.TeamProject] IN (${projectList}) AND`)}`;
+
+      const wiql = await client.request<{ workItems?: Array<{ id: number; url?: string }> }>(
+        "POST",
+        "wit/wiql",
+        {
+          project: null,
+          query: { "$top": normalizeTop(top, 200, 20000) },
+          body: { query: fullQuery }
+        }
+      );
+      const ids = (wiql.workItems ?? []).map((item) => item.id);
+
+      const workItems: unknown[] = [];
+      for (const projectName of projects) {
+        const projectIds = ids.slice(0, normalizeTop(top, 200, 20000));
+        const batch = await getWorkItemsBatch(client, projectName, projectIds, fields, expand);
+        workItems.push(...batch);
+        if (workItems.length >= normalizeTop(top, 200, 20000)) break;
+      }
+
+      return {
+        count: ids.length,
+        returnedCount: workItems.length,
+        workItems
+      };
+    }
+  );
 }
 
-async function getWorkItemsBatch(
+export async function getWorkItemsBatch(
   client: AdoClient,
   project: string,
   ids: number[],
@@ -501,7 +764,7 @@ async function getWorkItemsBatch(
   return workItems;
 }
 
-function fieldPatch(field: string, value: unknown, op = "add"): Array<{ op: string; path: string; value: unknown }> {
+export function fieldPatch(field: string, value: unknown, op = "add"): Array<{ op: string; path: string; value: unknown }> {
   return value === undefined ? [] : [{ op, path: `/fields/${field}`, value }];
 }
 
@@ -517,12 +780,4 @@ function groupByBoardColumn(workItems: unknown[]): Array<{ column: string; count
   return [...counts.entries()]
     .map(([column, count]) => ({ column, count }))
     .sort((left, right) => left.column.localeCompare(right.column));
-}
-
-function chunk<T>(values: T[], size: number): T[][] {
-  const chunks: T[][] = [];
-  for (let index = 0; index < values.length; index += size) {
-    chunks.push(values.slice(index, index + size));
-  }
-  return chunks;
 }

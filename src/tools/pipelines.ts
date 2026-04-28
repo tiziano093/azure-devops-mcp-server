@@ -16,6 +16,40 @@ const variableValueSchema = z.union([
 export function registerPipelinesTools(server: McpServer): void {
   registerTool(
     server,
+    "create_pipeline",
+    "Create a new YAML pipeline from a repository.",
+    {
+      ...projectArg,
+      name: z.string(),
+      repositoryId: z.string(),
+      repositoryType: z.enum(["azureReposGit", "gitHub"]).default("azureReposGit"),
+      branch: z.string().default("main"),
+      yamlPath: z.string().default("azure-pipelines.yml").describe("Path to the YAML file in the repo."),
+      folderId: z.number().int().optional().describe("Pipeline folder ID. Omit for root.")
+    },
+    async ({ project, name, repositoryId, repositoryType, branch, yamlPath, folderId }) => {
+      const client = AdoClient.getInstance();
+      return client.request("POST", "pipelines", {
+        project: client.resolveProject(project),
+        body: {
+          name,
+          folder: folderId !== undefined ? `\\folder_${folderId}` : "\\",
+          configuration: {
+            type: "yaml",
+            path: yamlPath,
+            repository: {
+              id: repositoryId,
+              type: repositoryType,
+              defaultBranch: branch.startsWith("refs/") ? branch : `refs/heads/${branch}`
+            }
+          }
+        }
+      });
+    }
+  );
+
+  registerTool(
+    server,
     "list_pipelines",
     "List YAML pipelines via the Pipelines API.",
     {
@@ -335,6 +369,46 @@ export function registerPipelinesTools(server: McpServer): void {
             comment
           }
         ]
+      });
+    }
+  );
+
+  registerTool(
+    server,
+    "list_build_artifacts",
+    "List artifacts published by a build.",
+    {
+      ...projectArg,
+      buildId: z.number().int().positive(),
+      artifactName: z.string().optional()
+    },
+    async ({ project, buildId, artifactName }) => {
+      const client = AdoClient.getInstance();
+      const path = artifactName
+        ? `build/builds/${buildId}/artifacts`
+        : `build/builds/${buildId}/artifacts`;
+      return client.request("GET", path, {
+        project: client.resolveProject(project),
+        query: { artifactName }
+      });
+    }
+  );
+
+  registerTool(
+    server,
+    "retry_build_stage",
+    "Retry a specific stage in a build pipeline run.",
+    {
+      ...projectArg,
+      buildId: z.number().int().positive(),
+      stageName: z.string().describe("Stage identifier, e.g. Build, Test, Deploy."),
+      retryDependencies: z.boolean().default(false)
+    },
+    async ({ project, buildId, stageName, retryDependencies }) => {
+      const client = AdoClient.getInstance();
+      return client.request("PATCH", `build/builds/${buildId}/stages/${encodeURIComponent(stageName)}`, {
+        project: client.resolveProject(project),
+        body: { state: 1, retryDependencies }
       });
     }
   );
