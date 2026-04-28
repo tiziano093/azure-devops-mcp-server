@@ -67,7 +67,7 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Configure registry credentials
-        uses: azure/cli@v2
+        uses: azure/cli@v3
         with:
           inlineScript: |
             az containerapp registry set \
@@ -78,7 +78,7 @@ jobs:
               --password "${{ secrets.GHCR_TOKEN }}"
 
       - name: Set runtime secrets
-        uses: azure/cli@v2
+        uses: azure/cli@v3
         with:
           inlineScript: |
             az containerapp secret set \
@@ -89,7 +89,7 @@ jobs:
                 mcp-auth-token="${{ secrets.MCP_AUTH_TOKEN }}"
 
       - name: Deploy image
-        uses: azure/cli@v2
+        uses: azure/cli@v3
         with:
           inlineScript: |
             az containerapp update \
