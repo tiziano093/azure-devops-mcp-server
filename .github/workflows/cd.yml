@@ -92,21 +92,61 @@ jobs:
         uses: azure/cli@v3
         with:
           inlineScript: |
+            ENV_VARS=(
+              "PORT=3000"
+              "MCP_HTTP_PATH=/mcp"
+              "AZURE_DEVOPS_ORG=${{ secrets.AZURE_DEVOPS_ORG }}"
+              "AZURE_DEVOPS_PROJECT=${{ secrets.AZURE_DEVOPS_PROJECT }}"
+              "AZURE_DEVOPS_PAT=secretref:azure-devops-pat"
+              "MCP_AUTH_TOKEN=secretref:mcp-auth-token"
+            )
+
+            if [ -n "${{ secrets.AZURE_DEVOPS_ORG_URL }}" ]; then
+              ENV_VARS+=("AZURE_DEVOPS_ORG_URL=${{ secrets.AZURE_DEVOPS_ORG_URL }}")
+            fi
+
             az containerapp update \
               --name "${{ vars.AZURE_CONTAINER_APP_NAME }}" \
               --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
               --image "${{ needs.publish.outputs.image }}" \
-              --set-env-vars \
-                PORT=3000 \
-                MCP_HTTP_PATH=/mcp \
-                AZURE_DEVOPS_ORG="${{ secrets.AZURE_DEVOPS_ORG }}" \
-                AZURE_DEVOPS_PROJECT="${{ secrets.AZURE_DEVOPS_PROJECT }}" \
-                AZURE_DEVOPS_PAT=secretref:azure-devops-pat \
-                MCP_AUTH_TOKEN=secretref:mcp-auth-token
+              --set-env-vars "${ENV_VARS[@]}"
 
-            if [ -n "${{ secrets.AZURE_DEVOPS_ORG_URL }}" ]; then
-              az containerapp update \
-                --name "${{ vars.AZURE_CONTAINER_APP_NAME }}" \
-                --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
-                --set-env-vars AZURE_DEVOPS_ORG_URL="${{ secrets.AZURE_DEVOPS_ORG_URL }}"
+      - name: Smoke test deployment
+        uses: azure/cli@v3
+        with:
+          inlineScript: |
+            FQDN="$(az containerapp show \
+              --name "${{ vars.AZURE_CONTAINER_APP_NAME }}" \
+              --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+              --query properties.configuration.ingress.fqdn \
+              --output tsv)"
+
+            if [ -z "$FQDN" ]; then
+              echo "Azure Container App does not expose an ingress FQDN."
+              exit 1
+            fi
+
+            HEALTH_URL="https://$FQDN/healthz"
+            MCP_URL="https://$FQDN/mcp"
+
+            for attempt in $(seq 1 20); do
+              health_code="$(curl -sS -o /tmp/healthz-response.txt -w '%{http_code}' "$HEALTH_URL" || true)"
+              if [ "$health_code" = "200" ]; then
+                break
+              fi
+
+              if [ "$attempt" -eq 20 ]; then
+                echo "Health check failed with status: ${health_code:-none}"
+                cat /tmp/healthz-response.txt 2>/dev/null || true
+                exit 1
+              fi
+
+              sleep 15
+            done
+
+            mcp_code="$(curl -sS -o /tmp/mcp-response.txt -w '%{http_code}' "$MCP_URL" || true)"
+            if [ "$mcp_code" != "401" ]; then
+              echo "Expected unauthenticated MCP endpoint to return 401, got: ${mcp_code:-none}"
+              cat /tmp/mcp-response.txt 2>/dev/null || true
+              exit 1
             fi
